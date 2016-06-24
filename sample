@@ -1,0 +1,371 @@
+<?php
+require ('includes/application_top.php');
+require (DIR_WS_CLASSES . 'currencies.php');
+$currencies = new currencies ();
+
+$files = scandir ( '../data/ebay/settle/' );
+$delimiter = ",";
+
+foreach ( $files as $filename ) {
+	if (strstr ( strtolower ( $filename ), "dhr.csv" )) {
+		$filepath = "../data/ebay/settle/" . $filename;
+		$logfilepath = "../data/ebay/settle/processed/" . date ( "YmdHis" ) . $filename;
+		$fd = fopen ( $filepath, "r" );
+		// $contents = fread ($fd,filesize($filepath));
+		$contents = array ();
+		do {
+			$contents [] = fgetcsv ( $fd, 4096 );
+		} while ( ! feof ( $fd ) );
+
+// Header row added by PayPal see comments below on line 62 CEC 2016-06-24
+
+		$headers = $contents [6];
+//	$headers = $contents [7];
+		foreach ( $headers as $number => $col ) {
+			// echo $number . ">" . $col . "<br>";
+			switch (trim ( $col )) {
+				case 'Date' :
+					$dateCol = $number;
+					break;
+				case 'Name' :
+					$nameCol = $number;
+					break;
+				case 'Status' :
+					$statusCol = $number;
+					break;
+				case 'Gross' :
+					$grossCol = $number;
+					break;
+				case 'Fee' :
+					$feeCol = $number;
+					break;
+				case 'Net' :
+					$netCol = $number;
+					break;
+				case 'Transaction ID' :
+					$transidCol = $number;
+					break;
+				case 'Reference Txn ID' :
+					$refTransidCol = $number;
+					break;
+				case 'From Email Address' :
+					$emailCol = $number;
+					break;
+				case 'Invoice Number' :
+					$invNumCol = $number;
+					break;
+				case 'Type' :
+					$typeCol = $number;
+					break;
+			}
+		}
+
+// Header row added to DHR files (that come from paypal) for the ebay report were changed.  They subtracted another header row.
+// PayPal removed Available Balance(EUR) row from CSV file.
+// Delete processed files from data/ebay/settle folder on WCMR & re-upload files to server for processing.
+// Modified $i = 6; for increment counting  CEC 2016-06-24
+
+//	for($i = 7; $i < count ( $contents ); $i ++) {
+		for($i = 6; $i < count ( $contents ); $i ++) {
+			$contents [$i] [$grossCol] = str_replace ( ",", "", $contents [$i] [$grossCol] ); // gross
+			$contents [$i] [$feeCol] = str_replace ( ",", "", $contents [$i] [$feeCol] ); // fee
+			$contents [$i] [$netCol] = str_replace ( ",", "", $contents [$i] [$netCol] ); // net
+			if(strlen($contents[$i][$invNumCol]) > 8) $contents[$i][$invNumCol] = '';
+			$db_entry = array (
+					date ( 'Y-m-d', strtotime ( $contents [$i] [$dateCol] ) ),
+					$contents [$i] [$nameCol],
+					$contents [$i] [$statusCol],
+					$contents [$i] [$grossCol],
+					$contents [$i] [$feeCol],
+					$contents [$i] [$netCol],
+					$contents [$i] [$transidCol],
+					$contents [$i] [$refTransidCol],
+					$contents [$i] [$invNumCol]
+			);
+			$report_number = floor ( (( int ) date ( 'z', strtotime ( $contents [$i] [$dateCol] ) )) / 7 ) + 1;
+			if ($report_number < 10) {
+				$report_number = '0' . $report_number;
+			}
+			$report_set = date ( 'Y', strtotime ( $contents [$i] [$dateCol] ) ) . $report_number;
+			for($j = 0; $j < count ( $db_entry ); $j ++) {
+				$db_entry [$j] = "'" . tep_db_input ( rtrim ( $db_entry [$j] ) ) . "'";
+			}
+			// print_r($db_entry);
+			if ($contents [$i] [$grossCol] != 0 and strpos($contents [$i] [$typeCol],"Transfer to Bank") ===  false and $contents [$i] [$nameCol] != "PayPal" and $contents [$i] [$nameCol] != "Cancelled Fee" and ($contents [$i] [$emailCol] == "sales@westcoastmall.net" or $contents [$i] [$statusCol] == "Completed" or strpos ( $contents [$i] [$statusCol], "Refunded" ) !== false)) {
+				tep_db_query ( "insert ignore into ebay_settle (`date`, `name`, `status`, `gross`, `fee`, `net`, `transaction_id`, `ref_transaction_id`, `invoice_number`, `report_set`) values(" . rtrim ( implode ( ",", $db_entry ) ) . ", " . $report_set . ")" );
+				//echo "insert ignore into ebay_settle (`date`, `name`, `status`, `gross`, `fee`, `net`, `transaction_id`, `ref_transaction_id`, `invoice_number`, `report_set`) values(" . rtrim ( implode ( ",", $db_entry ) ) . ", " . $report_set . ")<br>";
+			}
+		}
+		//print_r($contents);
+
+		fclose ( $fd );
+		unset ( $contents );
+		if (copy ( $filepath, $logfilepath )) {
+			unlink ( $filepath );
+		}
+	} // end if "dhr.csv"
+	if (strstr ( strtolower ( $filename ), "fileexchange_response" )) {
+		$filepath = "../data/ebay/settle/" . $filename;
+		$logfilepath = "../data/ebay/settle/processed/" . date ( "YmdHis" ) . $filename;
+		$fd = fopen ( $filepath, "r" );
+		// $contents = fread ($fd,filesize($filepath));
+		$contents = array ();
+		do {
+			$contents [] = fgetcsv ( $fd, 4096 );
+		} while ( ! feof ( $fd ) );
+
+		$headers = $contents [0];
+		foreach ( $headers as $number => $col ) {
+			// echo $number . ">" . $col . "<br>";
+			switch (trim ( $col )) {
+				case 'Transaction ID' :
+					$transidCol = $number;
+					break;
+				case 'PayPal Transaction ID' :
+					$payTransidCol = $number;
+					break;
+				case 'Item ID' :
+					$itemidCol = $number;
+					break;
+			}
+		}
+
+		for($i = 1; $i < count ( $contents ); $i ++) {
+			if ($contents [$i] [$itemidCol] and $contents [$i] [$payTransidCol] and $contents [$i] [$transidCol]) {
+				$update_query = "update orders set ebay_id = '" . $contents [$i] [$payTransidCol] . "' where channel_order_id = '" . $contents [$i] [$itemidCol] . '-' . $contents [$i] [$transidCol] . "' and channel_id = 3 and ebay_id = ''";
+				//echo $update_query . "<br>";
+				tep_db_query ( $update_query );
+			}
+		}
+		// print_r($contents);
+
+		fclose ( $fd );
+		unset ( $contents );
+		if (copy ( $filepath, $logfilepath )) {
+			unlink ( $filepath );
+		}
+	} // end if fileexchange
+} // end for each file
+// $testtime = '2009-05-06';
+  // echo $testtime;
+  // echo '<BR>';
+  // echo date('z', strtotime($testtime)) . " - day of year";
+  // echo '<BR>';
+  // echo (int)date('z', strtotime($testtime)) . " - integer day of year";
+  // echo '<BR>';
+  // echo ((int)date('z', strtotime($testtime)))/7 . " - idy divided by 7";
+  // echo '<BR>';
+  // echo floor(((int)date('z', strtotime($testtime)))/7) . " - rounded down";
+  // echo '<BR>';
+  // echo floor(((int)date('z', strtotime($testtime)))/7)+1 . " - plus 1";
+  // echo '<BR>';
+
+// if action is set, we have a chosen report
+if (isset ( $HTTP_GET_VARS ['report'] )) {
+	?>
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html <?php echo HTML_PARAMS; ?>>
+<head>
+<meta http-equiv="Content-Type"
+	content="text/html; charset=<?php echo CHARSET; ?>">
+<meta name="robots" content="noindex,nofollow">
+<title><?php echo TITLE; ?></title>
+<base href="<?php echo HTTP_SERVER . DIR_WS_ADMIN; ?>" />
+<!--[if IE]><script type="text/javascript" src="<?php echo tep_catalog_href_link('ext/flot/excanvas.min.js'); ?>"></script><![endif]-->
+<link rel="stylesheet" type="text/css"
+	href="<?php echo tep_catalog_href_link('ext/jquery/ui/redmond/jquery-ui-1.8.6.css'); ?>">
+<script type="text/javascript"
+	src="<?php echo tep_catalog_href_link('ext/jquery/jquery-1.4.2.min.js'); ?>"></script>
+<script type="text/javascript"
+	src="<?php echo tep_catalog_href_link('ext/jquery/ui/jquery-ui-1.8.6.min.js'); ?>"></script>
+
+  <?php
+	if (tep_not_null ( JQUERY_DATEPICKER_I18N_CODE )) {
+		?>
+  <script type="text/javascript"
+	src="<?php echo tep_catalog_href_link('ext/jquery/ui/i18n/jquery.ui.datepicker-' . JQUERY_DATEPICKER_I18N_CODE . '.js'); ?>"></script>
+<script type="text/javascript">
+  $.datepicker.setDefaults($.datepicker.regional['<?php echo JQUERY_DATEPICKER_I18N_CODE; ?>']);
+  </script>
+  <?php
+	}
+	?>
+  <script type="text/javascript" src="ckeditor/ckeditor.js"></script>
+<script type="text/javascript"
+	src="<?php echo tep_catalog_href_link('ext/flot/jquery.flot.js'); ?>"></script>
+<link rel="stylesheet" type="text/css" href="includes/stylesheet.css">
+<script type="text/javascript" src="includes/general.js"></script>
+</head>
+<body>
+	<div class="asrReportContainer">
+  <?php
+	$report_id = $HTTP_GET_VARS['report'];
+	$report_query = tep_db_query ( "select e.date, e.name, e.gross, e.fee, e.net, o.orders_id, e.transaction_id, e.ref_transaction_id, e.invoice_number from ebay_settle e left join orders o on e.transaction_id = o.ebay_id where e.report_set = '" . $report_id . "' ORDER BY o.orders_id" );
+
+	$report = array ();
+
+	while ( $report_array = tep_db_fetch_array ( $report_query ) ) {
+		if ($report_array ['orders_id'] != '') {
+			$report_array ['orders_id'] = add_order_prefix ( $report_array ['orders_id'] );
+		}
+		$report [] = $report_array;
+	}
+	$databaselist = array (
+			'WC' => 'wcmr',
+			'BC' => 'bearcat_BCSDB'
+	);
+
+	foreach ( $databaselist as $pfix => $curdb ) {
+		tep_db_connect ( DB_SERVER, REPORTS_USER, REPORTS_PASS, $curdb, 'db_link' );
+
+		for($i = 0; $i < sizeof ( $report ); $i ++) {
+			if ((is_null ( $report [$i] ['orders_id'] ) or $report [$i] ['orders_id'] == '') and (! is_null ( $report [$i] ['invoice_number'] ) and $report [$i] ['invoice_number'] != '')) {
+				$report [$i] ['orders_id'] = $report [$i] ['invoice_number'];
+			}
+			if ((is_null ( $report [$i] ['orders_id'] ) or $report [$i] ['orders_id'] == '') and (! is_null ( $report [$i] ['ref_transaction_id'] ) and $report [$i] ['ref_transaction_id'] != '')) {
+				$ref_order = '';
+				$ref_order_query = tep_db_query ( "select orders_id from orders where ebay_id = '" . $report [$i] ['ref_transaction_id'] . "'" );
+				if (mysqli_num_rows ( $ref_order_query ) != 0) {
+					$ref_order = tep_db_fetch_array ( $ref_order_query );
+					$report [$i] ['orders_id'] = add_order_prefix ( $ref_order ['orders_id'], $pfix );
+				}
+			} else {
+				$ref_order = '';
+				$ref_order_query = tep_db_query ( "select orders_id from orders where ebay_id = '" . $report [$i] ['transaction_id'] . "'" );
+				if (mysqli_num_rows ( $ref_order_query ) != 0) {
+					$ref_order = tep_db_fetch_array ( $ref_order_query );
+					$report [$i] ['orders_id'] = add_order_prefix ( $ref_order ['orders_id'], $pfix );
+				}
+			}
+		} // end for ($i = 0; $i < sizeof($report); $i++)
+	} // end foreach
+	tep_db_connect();
+	$FirstDayOfYear = '01/01/' . substr ( $report_id, 0, 4 ) . '23:59:59.000000';
+	$date = new DateTime ( $FirstDayOfYear );
+	$date_today = new DateTime ();
+	$date->modify ( "+" . ((( int ) substr ( $report_id, 4, 2 )) * 7) - 1 . " day" );
+	$end_date = $date->format ( "m/d/Y" );
+	$report_run = $date < $date_today;
+	$date->modify ( "-6 day" );
+	$start_date = $date->format ( "m/d/Y" );
+	$date->modify ("+7 day");
+	$report_run_date = $date->format ( "m/d/Y");
+	// print_r($report);
+
+
+
+    ?>
+  	<H1 class="asrReport">Ebay/PayPal Settlement Report</H1>
+<?php
+if ($report_run)
+{?>
+		<h3 class="asrReport">Settlement ID: <?php echo $report_id; ?></h3>
+		<p class="asrReport">Dates covered: <?php echo $start_date . " to " . $end_date; ?><br>
+		</p>
+		<hr class="asrReport">
+
+
+		<table class="asrReport">
+			<thead>
+				<tr class="asrHead">
+					<th style="border-bottom: 1px solid black; text-align: left">Customer
+						Name
+
+					</td>
+					<th style="border-bottom: 1px solid black; text-align: right">Date
+
+					</td>
+					<th style="border-bottom: 1px solid black; text-align: right">Order
+						Number
+
+					</td>
+					<th style="border-bottom: 1px solid black; text-align: right">Order
+						Total
+
+					</td>
+					<th style="border-bottom: 1px solid black; text-align: right">Order
+						Fees
+
+					</td>
+					<th style="border-bottom: 1px solid black; text-align: right">Total
+
+					</td>
+				</tr>
+			</thead>
+			<tbody>
+<?php
+	$report_order_total = 0;
+	$report_fee_total = 0;
+	$report_net_total = 0;
+	$report_counter = 0;
+	for($i = 0; $i < sizeof ( $report ); $i ++) {
+		if ($report_counter & 1) {
+			$trClass = 'asrDataOdd';
+		} else {
+			$trClass = 'asrDataEven';
+		}
+		?>
+	<tr class="<?php echo $trClass;?>">
+					<td><?php echo $report[$i]['name'];?></td>
+					<td style="text-align: right"><?php echo date("n/j/Y", strtotime($report[$i]['date']));?></td>
+					<td style="text-align: right"><?php echo $report[$i]['orders_id'];?></td>
+					<td style="text-align: right"><?php echo $currencies->format($report[$i]['gross']);?></td>
+					<td style="text-align: right"><?php echo $currencies->format($report[$i]['fee']);?></td>
+					<td style="text-align: right"><?php echo $currencies->format($report[$i]['net']);?></td>
+				</tr>
+<?php
+		// add totals
+		$report_order_total = $report_order_total + $report [$i] ['gross'];
+		$report_fee_total = $report_fee_total + $report [$i] ['fee'];
+		$report_net_total = $report_net_total + $report [$i] ['net'];
+		$report_counter++;
+	}
+
+	// print grand total row
+	?>
+		<tr class="asrTotal">
+					<td colspan="3" style="border-top: 1px double black; text-align: right"><strong>Grand
+							Total</strong></td>
+					<td style="border-top: 1px double black; text-align: right"><?php echo $currencies->format($report_order_total);?></td>
+					<td style="border-top: 1px double black; text-align: right"><?php echo $currencies->format($report_fee_total);?></td>
+					<td style="border-top: 1px double black; text-align: right"><?php echo $currencies->format($report_net_total);?></td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+
+
+<?php
+} else {
+	echo "<p>This report cannot be run until " . $report_run_date  . "</p>";
+}
+	//action isn't set, so we need to list the available reports
+} else {
+	require(DIR_WS_INCLUDES . 'template_top.php'); echo '
+	<h1>Ebay Settlements</h1>
+	'; ?>
+	<table width="50%">
+		<tr class="dataTableHeadingRow">
+			<td class="dataTableHeadingContent">Report ID</td>
+			<td class="dataTableHeadingContent">Start Date</td>
+			<td class="dataTableHeadingContent">End Date</td>
+		</tr>
+  <?php
+	$reports_query = tep_db_query ( "select report_set from ebay_settle group by report_set DESC" );
+	while ( $reports = tep_db_fetch_array ( $reports_query ) ) {
+		$FirstDayOfYear = '01/01/' . substr ( $reports ['report_set'], 0, 4 );
+		$date = new DateTime ( $FirstDayOfYear );
+		$date->modify ( "+" . ((( int ) substr ( $reports ['report_set'], 4, 2 )) * 7) - 1 . " day" );
+		$end_date = $date->format ( "m-d-Y" );
+		$date->modify ( "-6 day" );
+		$start_date = $date->format ( "m-d-Y" );
+		echo '<tr class="dataTableRow" onmouseover="rowOverEffect(this)" onmouseout="rowOutEffect(this)" onclick="document.location.href=http://www.westcoastmall.net/back/ebay_settle.php?report=' . $reports ['report_set'] . '" target="blank">' . '<td><a href="http://www.westcoastmall.net/back/ebay_settle.php?report=' . $reports ['report_set'] . '" target="blank">' . $reports ['report_set'] . '</a></td>' . '<td><a href="http://www.westcoastmall.net/back/ebay_settle.php?report=' . $reports ['report_set'] . '" target="blank">' . $start_date . '</a></td>' . '<td><a href="http://www.westcoastmall.net/back/ebay_settle.php?report=' . $reports ['report_set'] . '" target="blank">' . $end_date . '</a></td></tr>';
+    }
+
+  ?>
+  </table>
+  <?php
+  require(DIR_WS_INCLUDES . 'template_bottom.php');
+}
+  require(DIR_WS_INCLUDES . 'application_bottom.php');
+?>
